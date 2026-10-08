@@ -2,11 +2,26 @@ import AppKit
 import SwiftUI
 import WhispererCore
 
-/// Floating recording window. Non-activating, so the app you are typing in keeps focus, and click-through,
-/// so the transparent margin around the capsule never blocks the app underneath.
+/// Floating recording window. Non-activating, so the app you are typing in keeps focus. Clicks on the
+/// transparent margin fall through to the app underneath; the capsule itself can be dragged anywhere.
 final class PillPanel: NSPanel {
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
+    var onDragEnd: (() -> Void)?
+
+    /// Drag the capsule by hand (the panel never becomes key, so AppKit's own window drag is not used).
+    override func sendEvent(_ event: NSEvent) {
+        guard event.type == .leftMouseDown else { return super.sendEvent(event) }
+        let start = NSEvent.mouseLocation, origin = frame.origin
+        var moved = false
+        while let e = nextEvent(matching: [.leftMouseDragged, .leftMouseUp], until: .distantFuture, inMode: .eventTracking, dequeue: true),
+              e.type == .leftMouseDragged {
+            let now = NSEvent.mouseLocation
+            setFrameOrigin(NSPoint(x: origin.x + now.x - start.x, y: origin.y + now.y - start.y))
+            moved = true
+        }
+        if moved { onDragEnd?() }
+    }
 }
 
 /// The capsule morphs inside a fixed transparent panel (room for its widest state and its shadow), so the
@@ -16,18 +31,22 @@ final class PillController {
     private let model: AppModel
     private var panel: PillPanel?
     static let panelSize = NSSize(width: 480, height: 110)
+    /// Gap between the panel's bottom edge and the capsule's (room for the capsule's shadow).
+    static let capsuleInset: CGFloat = 18
 
     init(model: AppModel) { self.model = model }
 
     func show() {
         guard model.settings.recordingWindow != "none" else { return }
+        // A hidden panel is rebuilt on every show. macOS can quietly pin a long-lived hidden window to one
+        // desktop (seen live 2026-09-30: the pill stuck to Desktop 1 after a day up), and a fresh window
+        // always joins every desktop, including full-screen apps.
+        if let old = panel, !old.isVisible { old.close(); panel = nil }
         let p = panel ?? makePanel()
         panel = p
-        let size = Self.panelSize
-        let mouse = NSEvent.mouseLocation
-        let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main
-        if !p.isVisible, let vf = screen?.visibleFrame {
-            p.setFrameOrigin(NSPoint(x: vf.midX - size.width / 2, y: vf.minY + 10))
+        if !p.isVisible {
+            let mouse = NSEvent.mouseLocation
+            place(p, on: NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main)
         }
         // Always animate back to full: show() can land mid-way through a hide fade.
         if !p.isVisible { p.alphaValue = 0 }
@@ -44,16 +63,35 @@ final class PillController {
         }
     }
 
+    /// The saved spot (or bottom centre) on `screen`, pulled back on-screen if it would fall off.
+    private func place(_ p: PillPanel, on screen: NSScreen?) {
+        guard let vf = screen?.visibleFrame else { return }
+        let a = PillPlacement.anchor(model.settings.pillPosition, in: vf)
+        p.setFrameOrigin(NSPoint(x: a.x - Self.panelSize.width / 2, y: a.y - Self.capsuleInset))
+    }
+
+    /// Remember where the capsule was dropped, on whichever screen it landed.
+    private func saveDrop(_ p: PillPanel) {
+        let a = NSPoint(x: p.frame.midX, y: p.frame.minY + Self.capsuleInset)
+        let screen = NSScreen.screens.first { NSMouseInRect(a, $0.frame, false) } ?? p.screen ?? NSScreen.main
+        guard let vf = screen?.visibleFrame else { return }
+        model.settings.pillPosition = PillPlacement.fractions(a, in: vf)
+        place(p, on: screen)
+    }
+
+    func resetPosition() { model.settings.pillPosition = [] }
+
     private func makePanel() -> PillPanel {
         let p = PillPanel(contentRect: NSRect(origin: .zero, size: Self.panelSize),
                           styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        p.isReleasedWhenClosed = false   // ARC owns it; close() must not free it a second time
+        p.onDragEnd = { [weak self, weak p] in if let self, let p { self.saveDrop(p) } }
         p.isFloatingPanel = true
         p.level = .statusBar
         p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         p.backgroundColor = .clear
         p.isOpaque = false
         p.hasShadow = false            // the capsule draws its own; a window shadow would trail the morph
-        p.ignoresMouseEvents = true
         p.hidesOnDeactivate = false
         p.becomesKeyOnlyIfNeeded = true
         p.contentView = NSHostingView(rootView: PillView().environmentObject(model))
@@ -95,7 +133,7 @@ struct PillCapsule: View {
             if phase != .idle {
                 capsule
                     .scaleEffect(presented || reduceMotion ? 1 : 0.9, anchor: .bottom)
-                    .padding(.bottom, 18)
+                    .padding(.bottom, PillController.capsuleInset)
             }
         }
         .frame(width: PillController.panelSize.width, height: PillController.panelSize.height)

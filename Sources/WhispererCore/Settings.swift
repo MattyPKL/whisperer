@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 
 /// Where everything lives. Mirrors Superwhisper's `~/superwhisper` layout under `~/Whisperer`.
 public struct Paths: Sendable {
@@ -103,6 +104,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var importedFromSuperwhisper: Bool = false
     /// Longest single recording. At the limit the recording stops and transcribes (never discarded).
     public var maxRecordingMinutes: Double = 30
+    /// Where the recording pill sits, as [x, y] fractions of the screen (see `PillPlacement`). Empty = bottom centre.
+    public var pillPosition: [Double] = []
     /// Bumped by `SettingsMigration`. Stored files without it are version 1.
     public var settingsVersion: Int = 1
 
@@ -111,7 +114,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
         case triggerKey, holdThreshold, recordingWindow, pasteResult, restoreClipboard, keepModelWarmMinutes,
              soundEffects, soundVolume, showInDock, showSuperwhisperHistory, beamSearch, activeModeKey, modes,
-             vocabulary, replacements, starredModelIDs, importedFromSuperwhisper, maxRecordingMinutes, settingsVersion
+             vocabulary, replacements, starredModelIDs, importedFromSuperwhisper, maxRecordingMinutes, pillPosition, settingsVersion
     }
 
     /// Field by field: one bad or unknown value (a future trigger key, a number stored as text) falls back
@@ -139,6 +142,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         starredModelIDs = v(.starredModelIDs, d.starredModelIDs)
         importedFromSuperwhisper = v(.importedFromSuperwhisper, d.importedFromSuperwhisper)
         maxRecordingMinutes = min(240, max(1, v(.maxRecordingMinutes, d.maxRecordingMinutes)))   // a hand edit can't overflow
+        pillPosition = PillPlacement.valid(v(.pillPosition, d.pillPosition)) ? v(.pillPosition, d.pillPosition) : []
         settingsVersion = v(.settingsVersion, d.settingsVersion)
     }
 
@@ -151,6 +155,37 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public func mode(forApp bundleID: String?) -> Mode {
         if let b = bundleID, let m = modes.first(where: { $0.activationApps.contains(b) }) { return m }
         return activeMode
+    }
+}
+
+/// Where the recording pill goes on a screen. The saved position is the capsule's bottom-centre as fractions
+/// of the screen's usable area, so a spot picked on the laptop lands in the same place on a bigger monitor.
+public enum PillPlacement {
+    /// Room the capsule needs around its anchor (half its widest state across, its height up), so a saved
+    /// spot can never put any part of it off the screen or under the menu bar.
+    public static let halfWidth: Double = 150
+    public static let height: Double = 64
+    public static let defaultLift: Double = 28      // bottom centre, just above the Dock
+
+    public static func valid(_ f: [Double]) -> Bool { f.count == 2 && f.allSatisfy { $0.isFinite && (0...1).contains($0) } }
+
+    /// Anchor point (capsule bottom-centre) on a screen whose usable area is `vf`.
+    public static func anchor(_ f: [Double], in vf: CGRect) -> CGPoint {
+        let raw = valid(f) ? CGPoint(x: vf.minX + f[0] * vf.width, y: vf.minY + f[1] * vf.height)
+                           : CGPoint(x: vf.midX, y: vf.minY + defaultLift)
+        return clamp(raw, in: vf)
+    }
+
+    /// Fractions to store for an anchor the user dropped at `p`.
+    public static func fractions(_ p: CGPoint, in vf: CGRect) -> [Double] {
+        let c = clamp(p, in: vf)
+        guard vf.width > 0, vf.height > 0 else { return [] }
+        return [Double((c.x - vf.minX) / vf.width), Double((c.y - vf.minY) / vf.height)]
+    }
+
+    public static func clamp(_ p: CGPoint, in vf: CGRect) -> CGPoint {
+        let hw = min(halfWidth, vf.width / 2), h = min(height, vf.height)
+        return CGPoint(x: min(max(p.x, vf.minX + hw), vf.maxX - hw), y: min(max(p.y, vf.minY + 4), vf.maxY - h))
     }
 }
 

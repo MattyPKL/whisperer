@@ -222,6 +222,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         modes.submenu = sub
         menu.addItem(modes)
+        if !model.settings.pillPosition.isEmpty {
+            let r = NSMenuItem(title: "Reset Pill Position", action: #selector(resetPill), keyEquivalent: "")
+            r.target = self
+            menu.addItem(r)
+        }
         if !model.axTrusted || !model.micAuthorized {
             let p = NSMenuItem(title: "Permissions needed…", action: #selector(openWin), keyEquivalent: "")
             p.target = self
@@ -242,6 +247,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSPasteboard.general.setString(t, forType: .string)
     }
     @objc func openWin() { showWindow() }
+    @objc func resetPill() { dictation.pill.resetPosition() }
     @objc func pickMode(_ item: NSMenuItem) { if let k = item.representedObject as? String { model.setActiveMode(k) } }
 }
 

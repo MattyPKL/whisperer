@@ -429,6 +429,41 @@ struct StoreTests {
 }
 
 // Generated list: every check in this file runs from main.swift.
+struct PillPlacementTests {
+    let laptop = CGRect(x: 0, y: 0, width: 1800, height: 1130)
+    let monitor = CGRect(x: 1800, y: -200, width: 2560, height: 1410)
+
+    func defaultIsBottomCentre() {
+        let a = PillPlacement.anchor([], in: laptop)
+        expect(a.x == 900 && a.y == 28)
+    }
+
+    func savedSpotRoundTripsAndScalesAcrossScreens() {
+        let f = PillPlacement.fractions(CGPoint(x: 1339, y: 759), in: laptop)
+        let back = PillPlacement.anchor(f, in: laptop)
+        expect(abs(back.x - 1339) < 0.001 && abs(back.y - 759) < 0.001)
+        let big = PillPlacement.anchor(f, in: monitor)          // same relative spot on the other screen
+        expect(abs(big.x - (1800 + 2560 * 1339 / 1800)) < 0.01 && abs(big.y - (-200 + 1410 * 759 / 1130)) < 0.01)
+    }
+
+    func dropOffScreenIsPulledBackOn() {
+        let a = PillPlacement.anchor(PillPlacement.fractions(CGPoint(x: -500, y: 5000), in: laptop), in: laptop)
+        expect(a.x == PillPlacement.halfWidth && a.y == 1130 - PillPlacement.height)
+        let b = PillPlacement.anchor(PillPlacement.fractions(CGPoint(x: 9000, y: -40), in: laptop), in: laptop)
+        expect(b.x == 1800 - PillPlacement.halfWidth && b.y == 4)
+    }
+
+    func badStoredValuesFallBackToDefault() throws {
+        for bad in ["[0.5]", "[0.5, 2]", "[-1, 0.3]", "\"left\""] {
+            let json = "{\"pillPosition\": \(bad), \"soundVolume\": 0.4}".data(using: .utf8)!
+            let s = try JSONDecoder().decode(AppSettings.self, from: json)
+            expect(s.pillPosition.isEmpty && s.soundVolume == 0.4)
+        }
+        let ok = try JSONDecoder().decode(AppSettings.self, from: "{\"pillPosition\": [0.7, 0.6]}".data(using: .utf8)!)
+        expect(ok.pillPosition == [0.7, 0.6])
+    }
+}
+
 let allChecks: [(String, () throws -> Void)] = [
     ("TapDetectorTests.cleanTapTogglesOnThenOff", { TapDetectorTests().cleanTapTogglesOnThenOff() }),
     ("TapDetectorTests.holdIsPushToTalk", { TapDetectorTests().holdIsPushToTalk() }),
@@ -469,4 +504,8 @@ let allChecks: [(String, () throws -> Void)] = [
     ("StoreTests.brokenModeDoesNotWipeSettings", { try StoreTests().brokenModeDoesNotWipeSettings() }),
     ("StoreTests.modeForApp", { StoreTests().modeForApp() }),
     ("StoreTests.catalogInstalledNeedsCompleteFile", { try StoreTests().catalogInstalledNeedsCompleteFile() }),
+    ("PillPlacementTests.defaultIsBottomCentre", { PillPlacementTests().defaultIsBottomCentre() }),
+    ("PillPlacementTests.savedSpotRoundTripsAndScalesAcrossScreens", { PillPlacementTests().savedSpotRoundTripsAndScalesAcrossScreens() }),
+    ("PillPlacementTests.dropOffScreenIsPulledBackOn", { PillPlacementTests().dropOffScreenIsPulledBackOn() }),
+    ("PillPlacementTests.badStoredValuesFallBackToDefault", { try PillPlacementTests().badStoredValuesFallBackToDefault() }),
 ]
